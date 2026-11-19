@@ -21,6 +21,28 @@ index 72f143d..0a2c4f0 100644
  
  extern struct moat_mem *build_moat_mem(unsigned long addr, unsigned long nr_pages, pgprot_t prot);
  extern unsigned long alloc_virt_locked(unsigned long nr_pages);
+diff --git a/kernel/bpf/arraymap.c b/kernel/bpf/arraymap.c
+--- a/kernel/bpf/arraymap.c
++++ b/kernel/bpf/arraymap.c
+@@ -99,7 +99,8 @@ static void array_map_free_moat_mem(struct bpf_array *array) {
+     kfree(region);
+   }
+   if (WARN_ON(!array_mem))
+-    dealloc_moat_mem(array_mem);
++    return;
++  dealloc_moat_mem(array_mem);
+ }
+ 
+ static struct bpf_map *array_map_alloc(union bpf_attr *attr)
+@@ -857,7 +858,7 @@ static void fd_array_map_free(struct bpf_map *map)
+ 	for (i = 0; i < array->map.max_entries; i++)
+ 		BUG_ON(array->ptrs[i] != NULL);
+ 
+-	bpf_map_area_free(array);
++	array_map_free_moat_mem(array);
+ }
+ 
+ static void *fd_array_map_lookup_elem(struct bpf_map *map, void *key)
 diff --git a/kernel/bpf/core.c b/kernel/bpf/core.c
 index 43616b2..b5892d1 100644
 --- a/kernel/bpf/core.c
