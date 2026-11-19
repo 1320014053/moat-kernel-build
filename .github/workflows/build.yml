@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
   push:
     branches: [main]
-    paths: ['.github/workflows/build.yml']
+    paths: ['.github/workflows/build.yml', 'patches/x86-bpf-jit-convergence.patch', 'patches/moat-ringbuf-page-backing.patch']
 
 permissions:
   contents: read
@@ -15,11 +15,17 @@ jobs:
     timeout-minutes: 120
     env:
       LOCALVERSION: ''
-      KDEB_PKGVERSION: '6.1.38-1'
+      KDEB_PKGVERSION: '6.1.38-3'
       KDEB_COMPRESS: gzip
       KBUILD_BUILD_USER: github-actions
       KBUILD_BUILD_HOST: moat-kernel-build
     steps:
+      - name: Check out the build recipe
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          path: recipe
+          persist-credentials: false
+
       - name: Check out the MOAT artifact
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
         with:
@@ -27,6 +33,13 @@ jobs:
           ref: b1cfea3114ddf237c2100bc1bdc53f4030f4780b
           path: upstream
           persist-credentials: false
+
+      - name: Apply the JIT and ring buffer fixes
+        working-directory: upstream
+        run: |
+          git apply --directory=moat_linux \
+            "$GITHUB_WORKSPACE/recipe/patches/x86-bpf-jit-convergence.patch" \
+            "$GITHUB_WORKSPACE/recipe/patches/moat-ringbuf-page-backing.patch"
 
       - name: Install kernel build tools
         run: |
@@ -57,9 +70,9 @@ jobs:
         working-directory: upstream/moat_linux
         run: |
           cp config .config
-          scripts/config --set-str LOCALVERSION '-moat' --enable BPF_UNPRIV_DEFAULT_OFF
+          scripts/config --set-str LOCALVERSION '-moat-falco2' --enable BPF_UNPRIV_DEFAULT_OFF
           make CC=gcc-12 HOSTCC=gcc-12 HOSTCXX=g++-12 olddefconfig
-          test "$(make -s CC=gcc-12 kernelrelease)" = 6.1.38-moat
+          test "$(make -s CC=gcc-12 kernelrelease)" = 6.1.38-moat-falco2
           for option in X86_64 BPF_SYSCALL BPF_JIT BPF_EVENTS DEBUG_INFO_BTF FTRACE_SYSCALLS VIRTIO_BLK VIRTIO_PCI EXT4_FS; do
             grep -Fx "CONFIG_$option=y" .config
           done
@@ -76,7 +89,7 @@ jobs:
       - name: Verify the packages, MOAT symbols and BTF
         working-directory: upstream/moat_linux
         run: |
-          release=6.1.38-moat
+          release=6.1.38-moat-falco2
           out="$GITHUB_WORKSPACE/artifacts"
           mkdir "$out"
           image="../linux-image-${release}_${KDEB_PKGVERSION}_amd64.deb"
@@ -88,7 +101,7 @@ jobs:
           cmp "arch/x86/boot/bzImage" "$RUNNER_TEMP/moat-image/boot/vmlinuz-$release"
           cmp .config "$RUNNER_TEMP/moat-image/boot/config-$release"
           test -s "$RUNNER_TEMP/moat-image/lib/modules/$release/modules.builtin"
-          for symbol in init_moat_mm prepare_moat_prog; do
+          for symbol in init_moat_mm prepare_moat_prog moat_vmap_page_array; do
             grep -E "[[:space:]]${symbol}$" System.map
           done
           readelf -SW vmlinux > "$RUNNER_TEMP/moat-sections"
@@ -98,6 +111,8 @@ jobs:
           {
             echo "Source: https://github.com/jwnhy/MOAT-Open"
             echo "Commit: $(git rev-parse HEAD)"
+            echo "Linux x86 BPF JIT fix: c8831bdbfbab672c006a18006d36932a494b2fd6"
+            (cd "$GITHUB_WORKSPACE/recipe" && sha256sum patches/x86-bpf-jit-convergence.patch patches/moat-ringbuf-page-backing.patch)
             echo "Supplemental build files: Linux 6.1.38 commit 61fd484b2cf6bc8022e8e5ea6f693a9991740ac2"
             cat "$RUNNER_TEMP/moat-upstream-inputs"
             echo "Kernel: $release"
@@ -111,7 +126,7 @@ jobs:
       - name: Upload kernel packages
         uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
         with:
-          name: moat-linux-6.1.38-amd64
+          name: moat-linux-6.1.38-falco2-amd64
           path: artifacts/
           if-no-files-found: error
           compression-level: 0
