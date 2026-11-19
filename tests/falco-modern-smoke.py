@@ -170,3 +170,6 @@ if args.default_buffer:
         time.sleep(0.2)
     else:
         raise RuntimeError(f"Ring {ring_id} is still registered after Falco stopped")
+# Linux sets taint bits 7 and 9 for a kernel Oops and warning, respectively.
+if int(Path("/proc/sys/kernel/tainted").read_text()) & ((1 << 7) | (1 << 9)):
+    raise RuntimeError("Guest kernel recorded an Oops or warning")
