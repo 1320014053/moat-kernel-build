@@ -1,0 +1,94 @@
+name: Build MOAT Linux 6.1.38
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/build.yml']
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      LOCALVERSION: ''
+      KDEB_PKGVERSION: '6.1.38-1'
+      KDEB_COMPRESS: gzip
+      KBUILD_BUILD_USER: github-actions
+      KBUILD_BUILD_HOST: moat-kernel-build
+    steps:
+      - name: Check out the MOAT artifact
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          repository: jwnhy/MOAT-Open
+          ref: b1cfea3114ddf237c2100bc1bdc53f4030f4780b
+          path: upstream
+          persist-credentials: false
+
+      - name: Install kernel build tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            bc bison cpio dpkg-dev dwarves fakeroot flex g++-12 gcc-12-plugin-dev \
+            kmod libdw-dev libelf-dev libssl-dev rsync zstd
+
+      - name: Configure the x86-64 kernel from the author's config
+        working-directory: upstream/moat_linux
+        run: |
+          cp config .config
+          scripts/config --set-str LOCALVERSION '-moat' --enable BPF_UNPRIV_DEFAULT_OFF
+          make CC=gcc-12 HOSTCC=gcc-12 HOSTCXX=g++-12 olddefconfig
+          test "$(make -s CC=gcc-12 kernelrelease)" = 6.1.38-moat
+          for option in X86_64 BPF_SYSCALL BPF_JIT BPF_EVENTS DEBUG_INFO_BTF FTRACE_SYSCALLS VIRTIO_BLK VIRTIO_PCI EXT4_FS; do
+            grep -Fx "CONFIG_$option=y" .config
+          done
+
+      - name: Build the kernel and Debian packages
+        working-directory: upstream/moat_linux
+        run: |
+          make -j"$(nproc)" CC=gcc-12 HOSTCC=gcc-12 HOSTCXX=g++-12 bzImage modules
+          make -j"$(nproc)" CC=gcc-12 HOSTCC=gcc-12 HOSTCXX=g++-12 bindeb-pkg
+
+      - name: Verify the packages, MOAT symbols and BTF
+        working-directory: upstream/moat_linux
+        run: |
+          release=6.1.38-moat
+          out="$GITHUB_WORKSPACE/artifacts"
+          mkdir "$out"
+          image="../linux-image-${release}_${KDEB_PKGVERSION}_amd64.deb"
+          headers="../linux-headers-${release}_${KDEB_PKGVERSION}_amd64.deb"
+          test "$(dpkg-deb -f "$image" Package)" = "linux-image-$release"
+          test "$(dpkg-deb -f "$headers" Package)" = "linux-headers-$release"
+          test "$(dpkg-deb -f "$image" Architecture)" = amd64
+          dpkg-deb -x "$image" "$RUNNER_TEMP/moat-image"
+          cmp "arch/x86/boot/bzImage" "$RUNNER_TEMP/moat-image/boot/vmlinuz-$release"
+          cmp .config "$RUNNER_TEMP/moat-image/boot/config-$release"
+          test -s "$RUNNER_TEMP/moat-image/lib/modules/$release/modules.builtin"
+          for symbol in init_moat_mm prepare_moat_prog; do
+            grep -E "[[:space:]]${symbol}$" System.map
+          done
+          readelf -SW vmlinux > "$RUNNER_TEMP/moat-sections"
+          grep -E '[[:space:]]\.BTF[[:space:]]' "$RUNNER_TEMP/moat-sections"
+          cp "$image" "$headers" "$out/"
+          cp .config "$out/config-$release"
+          {
+            echo "Source: https://github.com/jwnhy/MOAT-Open"
+            echo "Commit: $(git rev-parse HEAD)"
+            echo "Kernel: $release"
+            gcc-12 --version | head -n 1
+            pahole --version
+          } > "$out/BUILD-INFO.txt"
+          cd "$out"
+          sha256sum *.deb "config-$release" BUILD-INFO.txt > SHA256SUMS
+          sha256sum -c SHA256SUMS
+
+      - name: Upload kernel packages
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f
+        with:
+          name: moat-linux-6.1.38-amd64
+          path: artifacts/
+          if-no-files-found: error
+          compression-level: 0
