@@ -15,7 +15,7 @@ jobs:
     timeout-minutes: 120
     env:
       LOCALVERSION: ''
-      KDEB_PKGVERSION: '6.1.38-3'
+      KDEB_PKGVERSION: '6.1.38-4'
       KDEB_COMPRESS: gzip
       KBUILD_BUILD_USER: github-actions
       KBUILD_BUILD_HOST: moat-kernel-build
