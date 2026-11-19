@@ -40,6 +40,19 @@ jobs:
             bc bison cpio dpkg-dev dwarves fakeroot flex g++-12 gcc-12-plugin-dev \
             kmod libdw-dev libelf-dev libssl-dev rsync zstd
 
+      - name: Restore build inputs omitted from the MOAT snapshot
+        working-directory: upstream/moat_linux
+        env:
+          STABLE_COMMIT: 61fd484b2cf6bc8022e8e5ea6f693a9991740ac2
+        run: |
+          for file in scripts/Makefile.lib scripts/Makefile.modfinal scripts/Makefile.modinst scripts/Makefile.modpost \
+                      drivers/tty/vt/defkeymap.map net/wireless/certs/sforshee.hex tools/lib/bpf/libbpf.map; do
+            test ! -e "$file"
+            mkdir -p "$(dirname "$file")"
+            curl -fsSL --retry 3 "https://raw.githubusercontent.com/gregkh/linux/$STABLE_COMMIT/$file" -o "$file"
+            sha256sum "$file" >> "$RUNNER_TEMP/moat-upstream-inputs"
+          done
+
       - name: Configure the x86-64 kernel from the author's config
         working-directory: upstream/moat_linux
         run: |
@@ -82,6 +95,8 @@ jobs:
           {
             echo "Source: https://github.com/jwnhy/MOAT-Open"
             echo "Commit: $(git rev-parse HEAD)"
+            echo "Supplemental build files: Linux 6.1.38 commit 61fd484b2cf6bc8022e8e5ea6f693a9991740ac2"
+            cat "$RUNNER_TEMP/moat-upstream-inputs"
             echo "Kernel: $release"
             gcc-12 --version | head -n 1
             pahole --version
